@@ -99,7 +99,7 @@ def execute(mode: str = "", optimizer: str = "cpu", checkpoint_dir: str = ""):
         "--tensor-model-parallel-size 2 "
         "--sequence-parallel "
         "--pipeline-model-parallel-size 1 "
-        "--context-parallel-size 2 "
+        "--context-parallel-size 1 "
         "--recompute-granularity full "
         "--recompute-method uniform "
         "--recompute-num-layers 1 "
