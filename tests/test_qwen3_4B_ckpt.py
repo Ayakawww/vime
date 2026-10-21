@@ -1,15 +1,21 @@
 import os
+import sys
 from argparse import ArgumentParser
+from pathlib import Path
 from shlex import quote
 
-import vime.utils.external_utils.command_utils as U
+if (tests_dir := str(Path(__file__).resolve().parent)) not in sys.path:
+    sys.path.insert(0, tests_dir)
 
+from platform_profiles import apply_profile_env, current_profile, download_dataset, download_model, ensure_asset_dirs
+
+import vime.utils.external_utils.command_utils as U
 
 ENABLE_EVAL = bool(int(os.environ.get("VIME_TEST_ENABLE_EVAL", "1")))
 
 MODEL_NAME = "Qwen3-4B"
 MODEL_TYPE = "qwen3-4B"
-NUM_GPUS = 8
+NUM_GPUS = 4
 
 
 parser = ArgumentParser()
@@ -21,18 +27,22 @@ parser.add_argument("--checkpoint-dir", default=None, help="Directory used for t
 
 def default_checkpoint_dir(args):
     save_mode = "async" if args.async_save else "sync"
-    return f"/root/models/{MODEL_NAME}_vime_{save_mode}_{args.save_optimizer}_save_{args.load_optimizer}_load"
+    name = f"{MODEL_NAME}_vime_{save_mode}_{args.save_optimizer}_save_{args.load_optimizer}_load"
+    return current_profile().model_path(name)
 
 
 def prepare(checkpoint_dir: str):
-    U.exec_command("mkdir -p /root/models /root/datasets")
-    U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
+    ensure_asset_dirs()
+    download_model(f"Qwen/{MODEL_NAME}")
     U.exec_command(f"rm -rf {quote(checkpoint_dir)}")
-    U.hf_download_dataset("zhuzilin/dapo-math-17k")
-    U.hf_download_dataset("zhuzilin/aime-2024")
+    download_dataset("zhuzilin/dapo-math-17k")
+    download_dataset("zhuzilin/aime-2024")
 
     U.convert_checkpoint(
-        model_name=MODEL_NAME, megatron_model_type=MODEL_TYPE, num_gpus_per_node=NUM_GPUS, dir_dst="/root/models"
+        model_name=MODEL_NAME,
+        megatron_model_type=MODEL_TYPE,
+        num_gpus_per_node=NUM_GPUS,
+        dir_dst=f"{current_profile().asset_root()}/models",
     )
 
 
@@ -52,7 +62,11 @@ def optimizer_args(optimizer: str):
 
 
 def execute(mode: str = "", optimizer: str = "cpu", checkpoint_dir: str = ""):
-    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}_torch_dist "
+    P = current_profile()
+    # Platforms without torch_dist conversion (see the npu profile) load the HF
+    # checkpoint natively instead of a converted reference.
+    ref_load = P.model_path(f"{MODEL_NAME}_torch_dist") if P.torch_dist_convert else P.model_path(MODEL_NAME)
+    ckpt_args = f"--hf-checkpoint {P.model_path(MODEL_NAME)}/ " f"--ref-load {ref_load} "
     checkpoint_dir_arg = quote(checkpoint_dir)
     if mode == "save":
         ckpt_args += f"--save {checkpoint_dir_arg} "
@@ -66,7 +80,7 @@ def execute(mode: str = "", optimizer: str = "cpu", checkpoint_dir: str = ""):
         ckpt_args += "--ckpt-step 1 "
 
     rollout_args = (
-        "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
+        f"--prompt-data {P.dataset_file('zhuzilin/dapo-math-17k', 'dapo-math-17k.jsonl')} "
         "--input-key prompt "
         "--label-key label "
         "--apply-chat-template "
@@ -90,7 +104,7 @@ def execute(mode: str = "", optimizer: str = "cpu", checkpoint_dir: str = ""):
         "--recompute-method uniform "
         "--recompute-num-layers 1 "
         "--use-dynamic-batch-size "
-        "--max-tokens-per-gpu 16384 "
+        f"--max-tokens-per-gpu {P.tune('max_tokens_per_gpu', 16384)} "
     )
 
     ppo_args = (
@@ -103,7 +117,11 @@ def execute(mode: str = "", optimizer: str = "cpu", checkpoint_dir: str = ""):
     )
 
     vllm_args = (
-        "--rollout-num-gpus-per-engine 2 --vllm-gpu-memory-utilization 0.8 --vllm-max-cudagraph-capture-size 16 "
+        f"--rollout-num-gpus-per-engine 2 "
+        f"{P.flag('vllm-gpu-memory-utilization', 'vllm_gpu_memory_utilization', 0.8)}"
+        f"{P.flag('vllm-max-cudagraph-capture-size', 'vllm_max_cudagraph_capture_size', 16)}"
+        f"{P.flag('vllm-max-num-seqs', 'vllm_max_num_seqs')}"
+        f"{P.flag('vllm-max-model-len', 'vllm_max_model_len')}"
     )
 
     ci_args = "--ci-test "
@@ -118,7 +136,7 @@ def execute(mode: str = "", optimizer: str = "cpu", checkpoint_dir: str = ""):
         # need to comment this when using model with MLA
         "--attention-backend flash "
         "--actor-num-nodes 1 "
-        "--actor-num-gpus-per-node 8 "
+        "--actor-num-gpus-per-node 4 "
         "--colocate "
     )
 
@@ -132,6 +150,7 @@ def execute(mode: str = "", optimizer: str = "cpu", checkpoint_dir: str = ""):
         f"{vllm_args} "
         f"{ci_args} "
         f"{misc_args} "
+        f"{P.train_args_extra}"
     )
 
     U.execute_train(
@@ -143,6 +162,7 @@ def execute(mode: str = "", optimizer: str = "cpu", checkpoint_dir: str = ""):
 
 if __name__ == "__main__":
     args = parser.parse_args()
+    apply_profile_env()
     # TODO also use typer
     checkpoint_dir = args.checkpoint_dir or default_checkpoint_dir(args)
     prepare(checkpoint_dir)

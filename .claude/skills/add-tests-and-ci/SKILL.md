@@ -40,6 +40,18 @@ if __name__ == "__main__":
 - `run-ci-changed` extracts a top-level `NUM_GPUS = <N>` constant from added/modified `tests/test_*.py` and `tests/plugin_contracts/test_*.py`; if missing, it defaults to 8 GPUs. Set `NUM_GPUS = 0` for CPU-only tests.
 - For GPU/e2e tests, follow the nearby file pattern (`prepare()`, `execute()`, `NUM_GPUS`, and any model/dataset constants).
 
+### Step 2b: Platform-Agnostic (Shared) Tests
+
+Any E2E test that should run on more than one platform (GPU now, NPU later) must consume `tests/platform_profiles/` instead of hardcoding platform differences:
+
+- Bootstrap + import (copy from `tests/test_qwen3_4B_ckpt.py`): sys.path shim, then `from platform_profiles import current_profile, ...`
+- Paths via `P.model_path()/P.dataset_file()/P.dataset_dir()`; downloads via `ensure_asset_dirs()/download_model()/download_dataset()`.
+- Platform-varying flags via `P.tune(key, gpu_default)` / `P.flag(cli_name, key, gpu_default)`; always-on platform flags via `P.train_args_extra`; capability branches via `P.supports(...)` — never `== "npu"`-style name comparisons (a lint test rejects them).
+- New platform = one file under `tests/platform_profiles/profiles/` + a CI suite entry; never edit existing tests for a new platform.
+- Register the NPU run in `.buildkite/npu_suites.py` under a `feature-*` suite; the GPU registration in `gpu_suites.py` stays unchanged.
+- Add a golden-replay case to `tests/utils/test_platform_profiles.py` pinning the pre-migration GPU command line.
+- Full guide: `tests/platform_profiles/README.md`.
+
 ### Step 3: Register Tests in GitHub CI
 
 Whenever adding, moving, or renaming a test file, update the GitHub workflow template before finishing:
@@ -88,6 +100,9 @@ Include:
 - Why this coverage protects against regression
 
 ## Common Mistakes
+
+- Writing `== "npu"` / `== "cuda"` (or setting `VIME_PLATFORM`) inside a shared test instead of using profile accessors
+- Editing an existing shared test to accommodate a new platform instead of adding a profile file
 
 - Editing generated workflow file only
 - Relying on `run-ci-changed` discovery for a new test that should run in the regular PR matrix

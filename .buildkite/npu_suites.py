@@ -36,6 +36,15 @@ SUITES = {
         # 35B convert plus the first rollout does not fit in the default 180 minutes.
         ("test_qwen3.5_35B_A3B_npu.py", "npu-16", "", {}, 360),
     ],
+    # Shared feature tests: the same scripts run on GPU (registered once in
+    # gpu_suites.py "ckpt"); platform differences resolve at runtime through
+    # tests/platform_profiles/. gpu placement of the optimizer is not yet
+    # validated on NPU (its established policy is cpu offload), so the matrix
+    # starts with cpu/cpu and async-save.
+    "feature-ckpt": [
+        ("test_qwen3_4B_ckpt.py", "npu-8", "--save-optimizer cpu --load-optimizer cpu", {"VIME_PLATFORM": "npu"}, 360),
+        ("test_qwen3_4B_ckpt.py", "npu-8", "--async-save", {"VIME_PLATFORM": "npu"}, 360),
+    ],
     "nightly": [],
 }
 

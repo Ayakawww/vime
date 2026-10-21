@@ -44,6 +44,8 @@ steps:
                 value: image-build
               - label: "run-npu-ci-smk"
                 value: smk
+              - label: "run-npu-ci-feature-ckpt (shared ckpt script, GPU+NPU)"
+                value: feature-ckpt
               - label: "run-npu-ci-nightly"
                 value: nightly
 
