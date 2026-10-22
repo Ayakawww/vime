@@ -45,6 +45,12 @@ SUITES = {
         ("test_qwen3_4B_ckpt.py", "npu-8", "--save-optimizer cpu --load-optimizer cpu", {"VIME_PLATFORM": "npu"}, 360),
         ("test_qwen3_4B_ckpt.py", "npu-8", "--async-save", {"VIME_PLATFORM": "npu"}, 360),
     ],
+    # Weight-sync dimension: full-disk update (GPU: megatron suite, 4 GPUs).
+    # VIME_TEST_NUM_ROLLOUT=2 bounds NPU request load and exercises the
+    # reload-after-sync path (same recipe the delta-disk NPU test uses).
+    "feature-weight-sync": [
+        ("test_full_disk_weight_update.py", "npu-4", "", {"VIME_PLATFORM": "npu", "VIME_TEST_NUM_ROLLOUT": "2"}),
+    ],
     "nightly": [],
 }
 

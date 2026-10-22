@@ -7,7 +7,15 @@ from shlex import quote
 if (tests_dir := str(Path(__file__).resolve().parent)) not in sys.path:
     sys.path.insert(0, tests_dir)
 
-from platform_profiles import apply_profile_env, current_profile, download_dataset, download_model, ensure_asset_dirs
+from platform_profiles import (
+    apply_profile_env,
+    current_profile,
+    download_dataset,
+    download_model,
+    ensure_asset_dirs,
+    require_devices,
+    validation_report,
+)
 
 import vime.utils.external_utils.command_utils as U
 
@@ -15,7 +23,6 @@ ENABLE_EVAL = bool(int(os.environ.get("VIME_TEST_ENABLE_EVAL", "1")))
 
 MODEL_NAME = "Qwen3-4B"
 MODEL_TYPE = "qwen3-4B"
-NUM_GPUS = 4
 
 
 parser = ArgumentParser()
@@ -32,6 +39,7 @@ def default_checkpoint_dir(args):
 
 
 def prepare(checkpoint_dir: str):
+    P = current_profile()
     ensure_asset_dirs()
     download_model(f"Qwen/{MODEL_NAME}")
     U.exec_command(f"rm -rf {quote(checkpoint_dir)}")
@@ -41,8 +49,8 @@ def prepare(checkpoint_dir: str):
     U.convert_checkpoint(
         model_name=MODEL_NAME,
         megatron_model_type=MODEL_TYPE,
-        num_gpus_per_node=NUM_GPUS,
-        dir_dst=f"{current_profile().asset_root()}/models",
+        num_gpus_per_node=P.topo("num_gpus", 8),
+        dir_dst=f"{P.asset_root()}/models",
     )
 
 
@@ -96,10 +104,10 @@ def execute(mode: str = "", optimizer: str = "cpu", checkpoint_dir: str = ""):
     )
 
     perf_args = (
-        "--tensor-model-parallel-size 2 "
+        f"--tensor-model-parallel-size {P.topo('tp', 2)} "
         "--sequence-parallel "
         "--pipeline-model-parallel-size 1 "
-        "--context-parallel-size 1 "
+        f"--context-parallel-size {P.topo('cp', 2)} "
         "--recompute-granularity full "
         "--recompute-method uniform "
         "--recompute-num-layers 1 "
@@ -117,7 +125,12 @@ def execute(mode: str = "", optimizer: str = "cpu", checkpoint_dir: str = ""):
     )
 
     vllm_args = (
-        f"--rollout-num-gpus-per-engine 2 "
+        # colocate engines must fit the platform's card budget; GPU tests rely
+        # on the framework default, so the flag renders only when a profile
+        # declares rollout_num_gpus
+        f"{P.flag('rollout-num-gpus', 'rollout_num_gpus')}"
+        # colocated engines mirror the training tensor-parallel size
+        f"--rollout-num-gpus-per-engine {P.topo('tp', 2)} "
         f"{P.flag('vllm-gpu-memory-utilization', 'vllm_gpu_memory_utilization', 0.8)}"
         f"{P.flag('vllm-max-cudagraph-capture-size', 'vllm_max_cudagraph_capture_size', 16)}"
         f"{P.flag('vllm-max-num-seqs', 'vllm_max_num_seqs')}"
@@ -136,7 +149,7 @@ def execute(mode: str = "", optimizer: str = "cpu", checkpoint_dir: str = ""):
         # need to comment this when using model with MLA
         "--attention-backend flash "
         "--actor-num-nodes 1 "
-        "--actor-num-gpus-per-node 4 "
+        f"--actor-num-gpus-per-node {P.topo('num_gpus', 8)} "
         "--colocate "
     )
 
@@ -155,7 +168,7 @@ def execute(mode: str = "", optimizer: str = "cpu", checkpoint_dir: str = ""):
 
     U.execute_train(
         train_args=train_args,
-        num_gpus_per_node=NUM_GPUS,
+        num_gpus_per_node=P.topo("num_gpus", 8),
         megatron_model_type=MODEL_TYPE,
     )
 
@@ -163,14 +176,21 @@ def execute(mode: str = "", optimizer: str = "cpu", checkpoint_dir: str = ""):
 if __name__ == "__main__":
     args = parser.parse_args()
     apply_profile_env()
-    # TODO also use typer
+    P = current_profile()
+    print(P.dump())
+    require_devices(P.topo("min_gpus", P.topo("num_gpus", 8)))
     checkpoint_dir = args.checkpoint_dir or default_checkpoint_dir(args)
     prepare(checkpoint_dir)
     for proxy_var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
         os.environ.pop(proxy_var, None)
-    execute(
-        "save" if not args.async_save else "async_save",
-        optimizer=args.save_optimizer,
-        checkpoint_dir=checkpoint_dir,
-    )
-    execute("load", optimizer=args.load_optimizer, checkpoint_dir=checkpoint_dir)
+    try:
+        execute(
+            "save" if not args.async_save else "async_save",
+            optimizer=args.save_optimizer,
+            checkpoint_dir=checkpoint_dir,
+        )
+        execute("load", optimizer=args.load_optimizer, checkpoint_dir=checkpoint_dir)
+    except BaseException:
+        print(validation_report(model=f"{MODEL_NAME} (ckpt test)", result="FAILED", notes="colocate"))
+        raise
+    print(validation_report(model=f"{MODEL_NAME} (ckpt test)", result="PASSED", notes="colocate"))

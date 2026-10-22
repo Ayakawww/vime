@@ -47,6 +47,8 @@ Any E2E test that should run on more than one platform (GPU now, NPU later) must
 - Bootstrap + import (copy from `tests/test_qwen3_4B_ckpt.py`): sys.path shim, then `from platform_profiles import current_profile, ...`
 - Paths via `P.model_path()/P.dataset_file()/P.dataset_dir()`; downloads via `ensure_asset_dirs()/download_model()/download_dataset()`.
 - Platform-varying flags via `P.tune(key, gpu_default)` / `P.flag(cli_name, key, gpu_default)`; always-on platform flags via `P.train_args_extra`; capability branches via `P.supports(...)` — never `== "npu"`-style name comparisons (a lint test rejects them).
+- Card counts and layouts via `P.topo("num_gpus"/"tp"/"cp", gpu_default)`; query topology keys only where the value genuinely varies by platform (unprefixed keys are the 4B-class default recipe; scenario-prefixed keys like `full_disk_*` scope to one test).
+- In `__main__`: `print(P.dump())` at startup, `require_devices(P.topo("min_gpus", P.topo("num_gpus", N)))` as the fail-fast card guard, and `validation_report(model=..., notes=...)` at the end (PASSED/FAILED).
 - New platform = one file under `tests/platform_profiles/profiles/` + a CI suite entry; never edit existing tests for a new platform.
 - Register the NPU run in `.buildkite/npu_suites.py` under a `feature-*` suite; the GPU registration in `gpu_suites.py` stays unchanged.
 - Add a golden-replay case to `tests/utils/test_platform_profiles.py` pinning the pre-migration GPU command line.

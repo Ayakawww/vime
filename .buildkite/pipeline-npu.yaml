@@ -46,6 +46,8 @@ steps:
                 value: smk
               - label: "run-npu-ci-feature-ckpt (shared ckpt script, GPU+NPU)"
                 value: feature-ckpt
+              - label: "run-npu-ci-feature-weight-sync (shared weight-sync scripts)"
+                value: feature-weight-sync
               - label: "run-npu-ci-nightly"
                 value: nightly
 

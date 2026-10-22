@@ -208,6 +208,98 @@ def download_dataset(full_name: str, profile: PlatformProfile | None = None) -> 
     return target
 
 
+# ── Hardware validation helpers ──────────────────────────────────────────────
+
+
+def visible_device_count(profile: PlatformProfile | None = None) -> int | None:
+    """Accelerators visible to this process, or None when the platform's
+    visibility env var is not set (nothing to count against)."""
+    p = profile or current_profile()
+    raw = os.environ.get(p.visible_devices_env, "").strip()
+    if not raw:
+        return None
+    return len([x for x in raw.split(",") if x.strip()])
+
+
+def require_devices(count: int, profile: PlatformProfile | None = None) -> None:
+    """Fail fast with a clear message when fewer accelerators are visible than
+    the test needs, instead of OOM'ing deep inside Megatron. Used with a
+    topology key: `require_devices(P.topo("min_gpus", 8))`. No-op when device
+    visibility is not declared in the environment."""
+    p = profile or current_profile()
+    raw = os.environ.get(p.visible_devices_env, "").strip()
+    if not raw:
+        return
+    available = len([x for x in raw.split(",") if x.strip()])
+    if available >= count:
+        return
+    raise SystemExit(
+        f"This test needs {count} accelerators but {p.visible_devices_env}={raw!r} exposes only {available} "
+        f"(profile={p.name}). If the requirement looks wrong, adjust the 'min_gpus' topology key in the profile."
+    )
+
+
+def hardware_label(profile: PlatformProfile | None = None) -> str:
+    """Best-effort hardware identification from the profile's hardware env
+    (e.g. SOC_VERSION on Ascend); falls back to the profile name."""
+    p = profile or current_profile()
+    if p.hardware_env:
+        raw = os.environ.get(p.hardware_env, "").strip()
+        if raw:
+            return p.hardware_names.get(raw, raw)
+    return p.name
+
+
+def validation_report(
+    model: str,
+    result: str = "PASSED",
+    notes: str = "",
+    profile: PlatformProfile | None = None,
+) -> str:
+    """End-of-run summary of what the profile actually changed for this test.
+
+    Reads the accessor-call recording on the profile (populated by
+    tune/flag/topo/asset_root/supports calls the test made) — call it after
+    the test body has built its arguments. `notes` appends free-form context
+    to the topology line (e.g. "colocate")."""
+    p = profile or current_profile()
+    hardware = hardware_label(p)
+    platform_line = f"{p.name.upper()} ({hardware})" if hardware != p.name else p.name.upper()
+    topos = p._queries_of("topo")
+    topology_line = ", ".join(f"{q.key}={q.value}" for q in topos) or "n/a"
+    if notes:
+        topology_line = f"{topology_line} ({notes})"
+
+    applied = {"paths": 0, "args": 0, "topology": 0}
+    for q in p.queries.values():
+        if not q.overridden:
+            continue
+        if q.kind == "path":
+            applied["paths"] += 1
+        elif q.kind in ("tune", "flag"):
+            applied["args"] += 1
+        elif q.kind == "topo":
+            applied["topology"] += 1
+    total = sum(applied.values())
+    detail = ", ".join(f"{kind}:{count}" for kind, count in applied.items() if count)
+
+    skipped = [q.key for q in p._queries_of("capability") if q.source == "profile" and q.value is False]
+
+    lines = [
+        "=== Platform Validation Report ===",
+        f"Platform: {platform_line}",
+        f"Model: {model}",
+        f"Topology: {topology_line}",
+        f"Profile overrides applied: {total} ({detail})" if detail else "Profile overrides applied: 0",
+    ]
+    if skipped:
+        lines.append(
+            f"Profile overrides skipped: {len(skipped)} (not applicable on this platform: {', '.join(skipped)})"
+        )
+    lines.append(f"Result: {result}")
+    return "\n".join(lines)
+
+
 __all__ = [
     "LaunchSpec",
     "PlatformProfile",
@@ -218,5 +310,9 @@ __all__ = [
     "download_model",
     "ensure_asset_dirs",
     "get_profile",
+    "hardware_label",
+    "require_devices",
     "reset_profile_cache",
+    "validation_report",
+    "visible_device_count",
 ]
